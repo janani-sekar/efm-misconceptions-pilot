@@ -1,0 +1,60 @@
+## Misconception C: Combining Unlike Terms
+
+**Description:**
+The student incorrectly combines a **coefficient** (the number in front of a variable) with a **constant** (a standalone number), treating them as if they were like terms.
+
+**Key Pattern:**
+The student treats `Ax + b` as if it could be combined into `(A+b)x` or similar incorrect forms.
+
+**Key Concept:**
+- **Like terms** have the SAME variable part: `3x` and `5x` are like terms
+- **Unlike terms** have DIFFERENT variable parts: `3x` and `5` are NOT like terms
+- A coefficient (with variable) and a constant (no variable) cannot be combined
+
+**Examples:**
+
+✓ **CORRECT:**
+```
+Step 1: 3x + 5 = 2x + 10
+Step 2: 3x - 2x = 10 - 5
+Step 3: x = 5
+```
+(Combined like terms: 3x and 2x)
+
+❌ **INCORRECT (Misconception C Present):**
+```
+Step 1: 3x + 5 = 2x + 10
+Step 2: 8x = 12x
+```
+(Incorrectly combined 3x with 5 to get 8x, and 2x with 10 to get 12x)
+
+✓ **CORRECT:**
+```
+Step 1: 2(3x + 4) = 5x - 1
+Step 2: 6x + 8 = 5x - 1
+```
+
+❌ **INCORRECT (Misconception C Present):**
+```
+Step 1: n(Ax + b) = cx + d
+Step 2: n((A+b)x) = cx + d
+```
+(Incorrectly combined Ax and b inside parentheses)
+
+❌ **INCORRECT (Misconception C Present):**
+```
+Step 1: Ax + b = cx + d
+Step 2: (A+b)x = cx + d
+```
+(Combined coefficient A with constant b)
+
+**What to Look For:**
+- A term with a variable and a constant appearing in Step 1
+- These being combined into a single term in Step 2
+- The variable part staying the same but the coefficient changing incorrectly
+- This makes ~2850 transitions incorrect in the dataset
+
+**Common Manifestations:**
+- `3x + 5` → `8x` (adding constant to coefficient)
+- `2x - 7` → `-5x` (subtracting constant from coefficient)
+- Distribution combined with this error: `2(x + 3)` → `2(4x)` → `8x`
