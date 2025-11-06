@@ -556,6 +556,69 @@ def _canon_abs_token(t: Any) -> str:
     return s[1:] if s.startswith("-") else s
 # ---------- Movement + sums + combined-unlike (unchanged semantics) ----------
 
+
+def _sum_numeric_only(terms: Iterable[str]) -> Tuple[str, float]:
+    """Sum only pure numeric tokens (ignore anything containing 'x')."""
+    total = 0.0
+    for t in terms:
+        ts = str(t).strip()
+        if _is_numeric_term(ts):
+            total += float(ts)
+    return _format_signed_number(total), total
+
+def _detect_combined_unlike_side(
+    from_terms: List[str],
+    to_terms: List[str],
+    to_set_canon: set,
+    paren_terms: Optional[List[str]] = None,
+    step_from_expr: str = "",
+) -> Tuple[bool, str, float]:
+    """
+    Returns (flag, matched_token_canon, sum_value_used).
+
+    Triggers if:
+      (A) your original rule matches: numeric sum or numeric sum * x appears on same side in step_to; OR
+      (B) new rule: an x-token in step_to has coefficient == (sum of x-coefs in step_from) + (sum of numeric terms).
+    Skips if parentheses remain on the *source* side (to avoid distributive cases).
+    """
+    # 0) Skip bracketed sources to avoid labeling distributive/expansion steps
+    if "(" in step_from_expr or ")" in step_from_expr or (paren_terms and len(paren_terms) > 0):
+        return False, "", 0.0
+
+    src = [t for t in from_terms if isinstance(t, str) and t.strip() != ""]
+    has_x   = any(_coef_of_x_token(t) is not None for t in src)
+    has_num = any(_is_numeric_term(t) for t in src)
+    if not (has_x and has_num):
+        return False, "", 0.0
+
+    # 1) Original path: numeric-only sum (ignore x) → check for sum or sumx on same side
+    sum_fmt_num, sum_val_num = _sum_numeric_only(src)
+    if sum_fmt_num:
+        cand_num  = _canon_term(sum_fmt_num)           # '7'
+        cand_numx = _canon_term(sum_fmt_num + "x")     # '7x'
+        if (cand_num and cand_num in to_set_canon) or (cand_numx and cand_numx in to_set_canon):
+            match = cand_numx if (cand_numx and cand_numx in to_set_canon) else cand_num
+            return True, match, sum_val_num
+
+    # 2) New path: fold numeric into x-coefficient → look for (Cx + S)x on same side
+    cx = _sum_x_coeff(src)        # sum of x coefficients
+    s  = sum_val_num              # numeric-only sum
+    target_coef = cx + s
+    target_tok  = _format_x_token_from_coef(target_coef)  # e.g. '12x', '-32x'
+    target_tok_c = _canon_term(target_tok)
+
+    # exact string match (fast path)
+    if target_tok_c in to_set_canon or (abs(target_coef - 1.0) < 1e-12 and "x" in to_set_canon):
+        return True, target_tok_c if target_tok_c in to_set_canon else "x", target_coef
+
+    # numeric match against any x-token in to_terms (handles odd formats like '2*24x')
+    for t in to_terms:
+        c = _coef_of_x_token(t)
+        if c is not None and abs(c - target_coef) < 1e-9:
+            return True, _canon_term(t), target_coef
+
+    return False, "", 0.0
+
 def add_all_todos_columns(df: pd.DataFrame,
                           col_from: str = "step_from",
                           col_to: str   = "step_to",
@@ -678,19 +741,27 @@ def add_all_todos_columns(df: pd.DataFrame,
         (lhs_sum_x_token and lhs_sum_x_token in s_lhs_to))
         # same for RHS
 
-        combined_unlike_lhs_to = (
-            lhs_from_has_x and lhs_from_has_num and
-            ((lhs_sum_token and lhs_sum_token in s_lhs_to) or
-             (lhs_sum_x_token and lhs_sum_x_token in s_lhs_to))
-        )
-        combined_unlike_rhs_to = (
-            rhs_from_has_x and rhs_from_has_num and
-            ((rhs_sum_token and rhs_sum_token in s_rhs_to) or
-             (rhs_sum_x_token and rhs_sum_x_token in s_rhs_to))
+        lhs_paren_terms_list = _as_list(row.get(f"{col_from}__lhs_paren_terms", []))
+
+        lhs_flag, _, _ = _detect_combined_unlike_side(
+            from_terms=_as_list(row.get(FROM_LHS, [])),
+            to_terms=_as_list(row.get(TO_LHS, [])),
+            to_set_canon=s_lhs_to,
+            paren_terms=(lhs_paren_terms_list if lhs_paren_terms_list else None),
+            step_from_expr=str(row.get(col_from, "")),
         )
 
-        combined_unlike_lhs_to_flags.append(bool(combined_unlike_lhs_to))
-        combined_unlike_rhs_to_flags.append(bool(combined_unlike_rhs_to))
+        rhs_flag, _, _ = _detect_combined_unlike_side(
+            from_terms=_as_list(row.get(FROM_RHS, [])),
+            to_terms=_as_list(row.get(TO_RHS, [])),
+            to_set_canon=s_rhs_to,
+            paren_terms=None,
+            step_from_expr=str(row.get(col_from, "")),  # bracket skip only applies to the *source* side
+        )
+
+        combined_unlike_lhs_to_flags.append(lhs_flag)
+        combined_unlike_rhs_to_flags.append(rhs_flag)
+        # ---------------- Combined-unlike detection ----------------
 
                 # --- NEW: bracket-expansion mistake detection ---
         # Goal: True iff
@@ -820,7 +891,41 @@ def add_all_todos_columns(df: pd.DataFrame,
 
     return df
 
+_X_SIMPLE = re.compile(r'^([+-]?\d+(?:\.\d+)?)x$', re.IGNORECASE)
+_X_TIMES  = re.compile(r'^([+-]?\d+(?:\.\d+)?)\*x$', re.IGNORECASE)
+_X_NUMNUM = re.compile(r'^([+-]?\d+(?:\.\d+)?)\*([+-]?\d+(?:\.\d+)?)x$', re.IGNORECASE)
 
+def _coef_of_x_token(tok: str) -> Optional[float]:
+    """Return numeric coefficient if token is 'Ax', 'A*x', or 'A*B x'; handle 'x','+x','-x' too."""
+    s = _normalize(re.sub(r"\s+", "", str(tok))).replace("X", "x")
+    if s in {"x", "+x"}:
+        return 1.0
+    if s == "-x":
+        return -1.0
+    m = _X_SIMPLE.fullmatch(s)
+    if m: 
+        return float(m.group(1))
+    m = _X_TIMES.fullmatch(s)
+    if m:
+        return float(m.group(1))
+    m = _X_NUMNUM.fullmatch(s)
+    if m:
+        return float(m.group(1)) * float(m.group(2))
+    return None
+
+def _sum_x_coeff(terms: Iterable[str]) -> float:
+    """Sum coefficients of x-terms on a side."""
+    total = 0.0
+    for t in terms:
+        c = _coef_of_x_token(t)
+        if c is not None:
+            total += c
+    return total
+
+def _format_x_token_from_coef(a: float) -> str:
+    """Format a coefficient into canonical x-token like '12x' or '-2x' (no leading '+')."""
+    s = _format_signed_number(a).lstrip("+")
+    return f"{s}x"
 def run_todos_tests(verbosity: int = 2) -> None:
     """
     Run a compact unittest suite for the TODOS pipeline and print a summary
@@ -976,7 +1081,7 @@ def run_todos_tests(verbosity: int = 2) -> None:
             """
             # Case 1: pure numeric with a fractional RHS
             df = pd.DataFrame({
-                "step_from": ["23=4/-15"],
+                "step_from": ["1.23=4/-15"],
                 "step_to":   ["23*2=4/-15"],  # multiply the LHS term; same RHS
             })
             out = add_all_todos_columns(df.copy(), drop_bad_rows=False)
@@ -985,7 +1090,7 @@ def run_todos_tests(verbosity: int = 2) -> None:
             p_to   = parse_equation(df.loc[0, "step_to"])
 
             # Division stays intact as one token
-            self.assertEqual(p_from.lhs_terms, ["23"])
+            self.assertEqual(p_from.lhs_terms, ["1.23"])
             self.assertEqual(p_from.rhs_terms, ["4/-15"])
             self.assertEqual(p_to.lhs_terms,   ["23*2"])
             self.assertEqual(p_to.rhs_terms,   ["4/-15"])
@@ -1212,7 +1317,7 @@ def main():
     df_out = add_all_todos_columns(df_clean, col_from="step_from", col_to="step_to",
                                 save_lists_as_json=True, drop_bad_rows=False)
     df_out.to_csv("transitions_with_moves_and_sums.csv", index=False)
-    # df_out = clean_up_df_out(df_out)
+    df_out = clean_up_df_out(df_out)
     analyze_df_out(df_out)
 
 
