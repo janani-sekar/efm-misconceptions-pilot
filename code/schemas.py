@@ -33,7 +33,7 @@ class TransitionResult(BaseModel):
     step_from: str
     step_to: str
     question: Optional[str] = None
-    question_id: Optional[int] = None
+    question_id: Optional[str] = None  # Changed to str to match actual data format
     transition_index: int
     
     # Detection results from each model

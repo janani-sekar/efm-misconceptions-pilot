@@ -11,6 +11,7 @@ import argparse
 import pathlib
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
 from detector import MisconceptionDetector
 from schemas import TransitionResult
@@ -25,9 +26,10 @@ def detect_batch(
     """Run detection on a batch of transitions."""
     results = []
     
-    def process_row(idx, row):
+    def process_row(idx, row) -> tuple[int, Optional[dict]]:
         try:
-            result = detector.detect_transition(
+            # Get structured result from detector
+            result: TransitionResult = detector.detect_transition(
                 step_from=row.get("step_text", ""),
                 step_to=row.get("step_text_next", ""),
                 question=row.get("question_text"),
